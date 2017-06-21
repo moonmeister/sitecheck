@@ -1,13 +1,77 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"golang.org/x/net/html"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
-  "strconv"
+	"time"
+
+	"github.com/asaskevich/govalidator"
+	"golang.org/x/net/html"
 )
+
+type httpRequest struct {
+	URL string
+}
+
+type httpStatus struct {
+	URL    string        `json:"url"`
+	Status int           `json:"status"`
+	Rtime  time.Duration `json:"rtime"`
+}
+
+//type HttpRequests []HttpRequest
+
+func httpHead(site string) (httpstatus httpStatus, err error) {
+
+	//if var is not null check site status
+	if len(site) != 0 {
+
+		//validate site var
+		validURL := govalidator.IsURL(site)
+
+		//error if invalid
+		if validURL == false {
+			return httpstatus, errors.New("Invalid URL")
+		}
+
+		//record time to measure response time
+		start := time.Now()
+
+		//HEAD request URL
+		resp, err := http.Head(site)
+
+		//Stop Response time timer
+		Rtime := time.Since(start)
+
+		//handle error from HEAD request
+		if err != nil {
+			return httpstatus, errors.New("Error requesting HEAD")
+		}
+
+		//unescape URL before writeout
+		usite, err := url.QueryUnescape(site)
+		if err != nil {
+			return httpstatus, errors.New("Error requesting Unescaping url")
+		}
+
+		//assemble JSON response
+		httpstatus = httpStatus{
+			URL:    usite,
+			Status: resp.StatusCode,
+			Rtime:  Rtime,
+		}
+
+		return httpstatus, nil
+		//else return no var
+	}
+
+	return httpstatus, errors.New("No Site Requested!\n")
+}
 
 // Helper function to pull the href attribute from a Token
 func getHref(t html.Token) (ok bool, href string) {
@@ -26,7 +90,7 @@ func getHref(t html.Token) (ok bool, href string) {
 
 // Extract all http** links from a given webpage
 func crawl(url string, ch chan string, chFinished chan bool) {
-  fmt.Println("Attempting to Crawl: \"" + url + "\"")
+	fmt.Println("Attempting to Crawl: \"" + url + "\"")
 
 	resp, err := http.Get(url)
 
@@ -37,7 +101,7 @@ func crawl(url string, ch chan string, chFinished chan bool) {
 
 	if err != nil {
 		fmt.Println("ERROR: Failed to crawl \"" + url + "\"")
-    fmt.Println("ERROR: " + strconv.Itoa(resp.StatusCode))
+		fmt.Println("ERROR: " + strconv.Itoa(resp.StatusCode))
 		return
 	}
 
@@ -70,34 +134,33 @@ func crawl(url string, ch chan string, chFinished chan bool) {
 
 			// Make sure the url begines in http**
 
-      switch strings.Split(href, ":")[0] {
-        case "mailto", "http", "https", "ftp" :
-            /*if href == url {
-              continue
-            }*/
-            ch <- href
-        default :
-          if strings.LastIndex(url, "/") != len(url)-1 && strings.Index(href, "/") != 0 {
-            url = url + "/"
-          }else if strings.LastIndex(url, "/") == len(url)-1 && strings.Index(href, "/") == 0  {
-            url = strings.TrimSuffix(url, "/")
-          }
-          ch <- (url + href)
-      }
-
+			switch strings.Split(href, ":")[0] {
+			case "mailto", "http", "https", "ftp":
+				/*if href == url {
+				  continue
+				}*/
+				ch <- href
+			default:
+				if strings.LastIndex(url, "/") != len(url)-1 && strings.Index(href, "/") != 0 {
+					url = url + "/"
+				} else if strings.LastIndex(url, "/") == len(url)-1 && strings.Index(href, "/") == 0 {
+					url = strings.TrimSuffix(url, "/")
+				}
+				ch <- (url + href)
+			}
 
 			/*hasProto := strings.Index(href, "http") == 0
-			if hasProto {
-				ch <- href
-			}else if len(href) > 1 && strings.Index(href, "mailto") != 0 {
-        //fmt.Println("url2: " + url2)
-        if strings.LastIndex(url, "/") != len(url)-1 && strings.Index(href, "/") != 0 {
-          url = url + "/"
-        }
-        ch <- (url + href)
-      }else{
-        ch <- href
-      }*/
+						if hasProto {
+							ch <- href
+						}else if len(href) > 1 && strings.Index(href, "mailto") != 0 {
+			        //fmt.Println("url2: " + url2)
+			        if strings.LastIndex(url, "/") != len(url)-1 && strings.Index(href, "/") != 0 {
+			          url = url + "/"
+			        }
+			        ch <- (url + href)
+			      }else{
+			        ch <- href
+			      }*/
 		}
 	}
 }
@@ -118,22 +181,24 @@ func main() {
 	// Subscribe to both channels
 	for c := 0; c < len(seedUrls); {
 		select {
-  		case url := <-chUrls:
-  			foundUrls[url] = true
-        //crawl(url, chUrls, chFinished)
-  		case <-chFinished:
-  			c++
+		case url := <-chUrls:
+			foundUrls[url] = true
+			//crawl(url, chUrls, chFinished)
+		case <-chFinished:
+			c++
 		}
 	}
 
-
-
 	// We're done! Print the results...
 
-	fmt.Println("\nFound", len(foundUrls), "unique urls:\n")
+	fmt.Println("\nFound", len(foundUrls), "unique urls:")
 
-	for url, _ := range foundUrls {
-		fmt.Println(" - " + url)
+	for url := range foundUrls {
+		result, err := httpHead(url)
+		if err != nil {
+			print(err)
+		}
+		fmt.Printf("URL: %v STATUS: %v\n", result.URL, result.Status)
 	}
 
 	close(chUrls)
